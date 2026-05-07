@@ -1,9 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import spriteSheet from './assets/orange-pet/spritesheet.webp';
-  import pomodoroIcon from './assets/panel-icons/pomodoro-focus.png';
-  import waterIcon from './assets/panel-icons/water-reminder.png';
-  import standIcon from './assets/panel-icons/stand-up-reminder.png';
   import { defaultConfig, type PetConfig, type TimerPhase } from './lib/types';
   import { loadBootstrap, saveConfig, setPanelVisible } from './lib/desktop';
   import { getCurrentWindow, primaryMonitor, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
@@ -21,12 +18,16 @@
   const CEILING_PADDING = 8;
   const GRAVITY = 1900;
   const AIR_DRAG = 0.992;
+  const RUN_FRAME_VX_THRESHOLD = 18;
   const SPRITE_COLUMNS = 8;
   const SPRITE_ROWS = 9;
   const SPRITE_CELL_WIDTH = 192;
   const SPRITE_CELL_HEIGHT = 208;
   const SPRITE_MAIN_WIDTH = 124;
-  const SPRITE_MINI_WIDTH = 60;
+  const IDLE_WANDER_SPEED = 128;
+  const IDLE_WANDER_DURATION_MS = 980;
+  const IDLE_WANDER_INTERVAL_MS = 3200;
+  const IDLE_WANDER_EDGE_BUFFER = 42;
 
   type SpriteState =
     | 'idle'
@@ -41,8 +42,8 @@
 
   const SPRITE_VARIANTS: Record<SpriteState, { row: number; frames: number; speedMs: number }> = {
     idle: { row: 0, frames: 6, speedMs: 180 },
-    'running-right': { row: 1, frames: 8, speedMs: 90 },
-    'running-left': { row: 2, frames: 8, speedMs: 90 },
+    'running-right': { row: 1, frames: 8, speedMs: 72 },
+    'running-left': { row: 2, frames: 8, speedMs: 72 },
     waving: { row: 3, frames: 4, speedMs: 140 },
     jumping: { row: 4, frames: 5, speedMs: 120 },
     failed: { row: 5, frames: 8, speedMs: 110 },
@@ -79,6 +80,9 @@
   let standingScore = 100;
   let petVisualY = 0;
   let phaseLabel = '';
+  let focusCaption = '开始一轮专注，宠物会切到认真状态。';
+  let waterCaption = '按固定节奏补水，别让叶冠先蔫下来。';
+  let standCaption = '每隔一段时间起身，让宠物也跟着舒展。';
 
   let petX = 300;
   let petY = 0;
@@ -87,6 +91,7 @@
   let petScaleX = 1;
   let petScaleY = 1;
   let petRotation = 0;
+  let facingDirection: 'left' | 'right' = 'right';
   let isDragging = false;
   let isAirborne = false;
   let dragDistance = 0;
@@ -104,6 +109,7 @@
   let frameAt = 0;
   let spriteState: SpriteState = 'idle';
   let spriteSpec = SPRITE_VARIANTS.idle;
+  let lastHoverJumpAt = 0;
 
   function idleBlinkFrame(t: number): number {
     const cycle = 3800;
@@ -119,6 +125,7 @@
   }
   let spriteFrame = 0;
   let lastPersistSignature = '';
+  let nextIdleWanderDirection: 'left' | 'right' = 'right';
 
   type IdleAction = 'none' | 'wander-left' | 'wander-right' | 'wave' | 'hop';
   let idleAction: IdleAction = 'none';
@@ -213,12 +220,18 @@
     moodStickyUntil = stickyMs > 0 ? Date.now() + stickyMs : 0;
   };
 
+  const updateFacingDirection = (vx: number) => {
+    if (vx > 8) {
+      facingDirection = 'right';
+    } else if (vx < -8) {
+      facingDirection = 'left';
+    }
+  };
+
   const resolveSpriteState = (): SpriteState => {
     if (isDragging) {
-      if (Math.abs(petVx) > 140) {
-        return petVx >= 0 ? 'running-right' : 'running-left';
-      }
-      return 'running';
+      updateFacingDirection(petVx);
+      return facingDirection === 'right' ? 'running-right' : 'running-left';
     }
     if (isAirborne) {
       return 'jumping';
@@ -250,15 +263,25 @@
     if (phase === 'break') {
       return 'review';
     }
+    if (Math.abs(petVx) > RUN_FRAME_VX_THRESHOLD && !isAirborne) {
+      updateFacingDirection(petVx);
+      return facingDirection === 'right' ? 'running-right' : 'running-left';
+    }
+    if (idleAction === 'wander-left') {
+      facingDirection = 'left';
+      return 'running-left';
+    }
+    if (idleAction === 'wander-right') {
+      facingDirection = 'right';
+      return 'running-right';
+    }
+    if (idleAction === 'wave') return 'waving';
     if (phase === 'paused-focus' || phase === 'paused-break') {
       return 'idle';
     }
     if (waterDue || standDue) {
       return 'review';
     }
-    if (idleAction === 'wander-left') return 'running-left';
-    if (idleAction === 'wander-right') return 'running-right';
-    if (idleAction === 'wave') return 'waving';
     return 'idle';
   };
 
@@ -462,9 +485,10 @@
     petY = clamp(petY + dy, PET_HALF_Y + 18, floorY());
     petVx = clamp(dx / dt, -MAX_DRAG_SPEED, MAX_DRAG_SPEED);
     petVy = clamp(dy / dt, -MAX_DRAG_SPEED, MAX_DRAG_SPEED);
-    petRotation = clamp(petVx * 0.015, -18, 18);
-    petScaleX = clamp(1 + Math.abs(petVx) / 2600 + Math.max(-petVy, 0) / 3200, 1, 1.18);
-    petScaleY = clamp(1 - Math.abs(petVx) / 3800, 0.84, 1.02);
+    updateFacingDirection(petVx);
+    petRotation = 0;
+    petScaleX = clamp(1 + Math.max(-petVy, 0) / 3200, 1, 1.12);
+    petScaleY = clamp(1 - Math.abs(petVx) / 5200, 0.9, 1.02);
     lastPointerAt = nowAt;
     void syncPetWindow();
   };
@@ -522,6 +546,18 @@
     panelView = panelView === 'dashboard' ? 'stats' : 'dashboard';
   };
 
+  const hoverJump = () => {
+    if (!isPetView || isDragging || isAirborne) return;
+    const nowMs = Date.now();
+    if (nowMs - lastHoverJumpAt < 2200) return;
+    lastHoverJumpAt = nowMs;
+    petVy = -260;
+    isAirborne = true;
+    idleAction = 'wave';
+    idleActionEndsAt = nowMs + 900;
+    setMood('hover', '嘿！你碰到我了。', 1800);
+  };
+
   const physicsTick = (dt: number) => {
     if (!isPetView || isDragging) {
       return;
@@ -534,7 +570,7 @@
       petX += petVx * dt;
       petY += petVy * dt;
       petVx *= AIR_DRAG;
-      petRotation = clamp(petVx * 0.008, -12, 12);
+      petRotation = 0;
 
       const leftBound = PET_HALF_X + SIDE_PADDING;
       const rightBound = viewportWidth - PET_HALF_X - SIDE_PADDING;
@@ -570,8 +606,10 @@
       if (idleAction === 'wander-left' || idleAction === 'wander-right') {
         petX += petVx * dt;
         petX = clamp(petX, PET_HALF_X + SIDE_PADDING, viewportWidth - PET_HALF_X - SIDE_PADDING);
-        const targetRot = petVx > 0 ? 5 : -5;
-        petRotation = lerp(petRotation, targetRot, 0.15);
+        petRotation = 0;
+        const stride = Math.sin(now / 65);
+        petScaleX = lerp(petScaleX, 0.97 + Math.abs(stride) * 0.07, 0.2);
+        petScaleY = lerp(petScaleY, 1.01 - Math.abs(stride) * 0.08, 0.2);
         void syncPetWindow();
       } else {
         petRotation = lerp(petRotation, 0, 0.12);
@@ -621,32 +659,32 @@
     if (idleAction !== 'none' && now > idleActionEndsAt) {
       if (idleAction === 'wander-left' || idleAction === 'wander-right') {
         petVx = 0;
-        petScaleX = 1.08;
-        petScaleY = 0.9;
+        petScaleX = 1.04;
+        petScaleY = 0.96;
       }
       idleAction = 'none';
       refreshMood();
     }
 
     if (idleAction === 'none' && now > nextIdleActionAt) {
-      const roll = Math.random();
-      if (roll < 0.25) {
-        const dir: IdleAction = Math.random() < 0.5 ? 'wander-left' : 'wander-right';
-        idleAction = dir;
-        petVx = dir === 'wander-left' ? -55 : 55;
-        petScaleX = 0.9;
-        petScaleY = 1.1;
-        idleActionEndsAt = now + 2000 + Math.random() * 2500;
-      } else if (roll < 0.38) {
-        idleAction = 'wave';
-        idleActionEndsAt = now + 900;
-      } else if (roll < 0.48) {
-        idleAction = 'hop';
-        petVy = -380;
-        isAirborne = true;
-        idleActionEndsAt = now + 1200;
+      const leftBound = PET_HALF_X + SIDE_PADDING;
+      const rightBound = viewportWidth - PET_HALF_X - SIDE_PADDING;
+      let dir = nextIdleWanderDirection;
+
+      if (petX <= leftBound + IDLE_WANDER_EDGE_BUFFER) {
+        dir = 'right';
+      } else if (petX >= rightBound - IDLE_WANDER_EDGE_BUFFER) {
+        dir = 'left';
       }
-      nextIdleActionAt = now + 4000 + Math.random() * 7000;
+
+      idleAction = dir === 'left' ? 'wander-left' : 'wander-right';
+      petVx = dir === 'left' ? -IDLE_WANDER_SPEED : IDLE_WANDER_SPEED;
+      facingDirection = dir;
+      nextIdleWanderDirection = dir === 'left' ? 'right' : 'left';
+      petScaleX = 0.98;
+      petScaleY = 1.02;
+      idleActionEndsAt = now + IDLE_WANDER_DURATION_MS;
+      nextIdleActionAt = now + IDLE_WANDER_INTERVAL_MS;
     }
   };
 
@@ -753,9 +791,21 @@
       ? '专注中'
       : phase === 'break'
         ? '休息中'
-      : phase === 'paused-focus' || phase === 'paused-break'
+        : phase === 'paused-focus' || phase === 'paused-break'
           ? '已暂停'
           : '';
+  $: focusCaption =
+    phase === 'focus'
+      ? '卜卜正在积攒专注能量。'
+      : phase === 'break'
+        ? '进入恢复节奏，等会再冲一轮。'
+        : '开始一轮专注，宠物会切到认真状态。';
+  $: waterCaption = waterDue
+    ? '叶冠开始闪动了，去喝一口水。'
+    : `每 ${config.waterIntervalMinutes} 分钟检查一次补水节奏。`;
+  $: standCaption = standDue
+    ? '该起身活动两分钟了。'
+    : `每 ${config.standIntervalMinutes} 分钟提醒一次起身。`;
   $: spriteState = resolveSpriteState();
   $: spriteSpec = SPRITE_VARIANTS[spriteState];
   $: spriteFrame =
@@ -770,6 +820,7 @@
       class={`pet pet-window pet-${mood}`}
       type="button"
       aria-label="桌面宠物"
+      on:pointerenter={hoverJump}
       on:pointerdown={pointerDown}
       on:click={openPanel}
       style={`--pet-scale-x:${petScaleX}; --pet-scale-y:${petScaleY}; --pet-rotate:${petRotation}deg;`}
@@ -793,7 +844,6 @@
               <div class="pet-sprite panel-mark-sprite" style={spriteVars(28)}></div>
             </div>
             <div class="panel-title-group">
-              <p class="eyebrow">Dashboard</p>
               <h1>卜卜</h1>
             </div>
           </div>
@@ -825,42 +875,35 @@
 
         {#if panelView === 'dashboard'}
           <section class="card-group">
-            <article class="feature-card focus-card">
-              <div class="focus-card-header">
-                <div class="row-icon row-icon-focus" aria-hidden="true">
-                  <img src={pomodoroIcon} alt="" />
-                </div>
-                <div class="focus-card-title">
-                  <h3>番茄钟</h3>
-                  <span class="focus-chip">{phaseLabel || '准备就绪'}</span>
-                </div>
-                <div class="focus-card-actions">
-                  <button
-                    class="icon-ghost"
-                    type="button"
-                    aria-label={phase === 'paused-focus' || phase === 'paused-break' ? '继续' : '暂停'}
-                    on:click={togglePause}
-                  >
-                    {phase === 'paused-focus' || phase === 'paused-break' ? '▶' : '⏸'}
-                  </button>
-                  <button
-                    class="round-action"
-                    type="button"
-                    aria-label={phase === 'focus' || phase === 'break' ? '重新开始专注' : '开始专注'}
-                    on:click={startFocus}
-                  >
-                    {phase === 'focus' || phase === 'break' ? '↻' : '▶'}
-                  </button>
-                </div>
+            <article class="feature-card focus-card reminder-card">
+              <div class="row-icon row-icon-focus" aria-hidden="true">
+                <svg class="pixel-icon" viewBox="0 0 16 16" shape-rendering="crispEdges">
+                  <rect x="6" y="1" width="4" height="2"></rect>
+                  <rect x="5" y="3" width="6" height="1"></rect>
+                  <rect x="4" y="4" width="8" height="1"></rect>
+                  <rect x="3" y="5" width="10" height="1"></rect>
+                  <rect x="2" y="6" width="12" height="6"></rect>
+                  <rect x="3" y="12" width="10" height="1"></rect>
+                  <rect x="4" y="13" width="8" height="1"></rect>
+                  <rect x="5" y="14" width="6" height="1"></rect>
+                  <rect x="7" y="7" width="1" height="3" class="pixel-ink"></rect>
+                  <rect x="8" y="8" width="2" height="1" class="pixel-ink"></rect>
+                  <rect x="10" y="7" width="1" height="1" class="pixel-ink"></rect>
+                </svg>
               </div>
-              <div class="timer-display">
-                <span class="timer-label">{timerLabel}</span>
-                <div class="timer-progress">
-                  <div class="timer-progress-fill" style={`width: ${focusProgress * 100}%`}></div>
-                </div>
+              <div class="row-body">
+                <span class="timer-inline">{timerLabel}</span>
+                <span class="focus-chip">{phaseLabel || '准备就绪'}</span>
               </div>
-              <div class="focus-card-foot">
-                <button class="mini-ghost" type="button" on:click={resetTimer}>重置</button>
+              <button
+                class="round-action"
+                type="button"
+                aria-label={phase === 'focus' || phase === 'break' ? '暂停' : phase === 'idle' ? '开始专注' : '继续'}
+                on:click={phase === 'idle' ? startFocus : togglePause}
+              >
+                {phase === 'focus' || phase === 'break' ? '⏸' : '▶'}
+              </button>
+              <div class="row-foot">
                 <div class="stepper">
                   <button type="button" on:click={() => adjustFocusMinutes(-5)}>-</button>
                   <strong>{config.focusMinutes}m</strong>
@@ -876,10 +919,21 @@
 
             <article class:due={waterDue} class="feature-card reminder-card water-card">
               <div class="row-icon row-icon-water" aria-hidden="true">
-                <img src={waterIcon} alt="" />
+                <svg class="pixel-icon" viewBox="0 0 16 16" shape-rendering="crispEdges">
+                  <rect x="7" y="1" width="2" height="2"></rect>
+                  <rect x="6" y="3" width="4" height="1"></rect>
+                  <rect x="5" y="4" width="6" height="2"></rect>
+                  <rect x="4" y="6" width="8" height="3"></rect>
+                  <rect x="5" y="9" width="6" height="2"></rect>
+                  <rect x="6" y="11" width="4" height="2"></rect>
+                  <rect x="7" y="13" width="2" height="1"></rect>
+                  <rect x="10" y="5" width="1" height="2" class="pixel-highlight"></rect>
+                  <rect x="9" y="4" width="1" height="1" class="pixel-highlight"></rect>
+                </svg>
               </div>
               <div class="row-body">
                 <h3>{waterDue ? '该补水了' : '补水稳定'}</h3>
+                <p class="row-copy">{waterCaption}</p>
               </div>
               <button class="round-action" type="button" aria-label="我喝了" on:click={confirmWater}>✓</button>
               <div class="row-foot">
@@ -893,10 +947,23 @@
 
             <article class:due={standDue} class="feature-card reminder-card stand-card">
               <div class="row-icon row-icon-stand" aria-hidden="true">
-                <img src={standIcon} alt="" />
+                <svg class="pixel-icon" viewBox="0 0 16 16" shape-rendering="crispEdges">
+                  <rect x="7" y="2" width="2" height="7"></rect>
+                  <rect x="5" y="4" width="2" height="2"></rect>
+                  <rect x="9" y="4" width="2" height="2"></rect>
+                  <rect x="6" y="1" width="1" height="1"></rect>
+                  <rect x="9" y="1" width="1" height="1"></rect>
+                  <rect x="5" y="9" width="6" height="2"></rect>
+                  <rect x="4" y="11" width="3" height="2"></rect>
+                  <rect x="9" y="11" width="3" height="2"></rect>
+                  <rect x="3" y="13" width="4" height="1"></rect>
+                  <rect x="9" y="13" width="4" height="1"></rect>
+                  <rect x="7" y="0" width="2" height="1" class="pixel-highlight"></rect>
+                </svg>
               </div>
               <div class="row-body">
                 <h3>{standDue ? '该活动了' : '节奏正常'}</h3>
+                <p class="row-copy">{standCaption}</p>
               </div>
               <button class="round-action" type="button" aria-label="我起来了" on:click={confirmStand}>✓</button>
               <div class="row-foot">
@@ -911,10 +978,7 @@
         {:else}
           <section class="stats-card">
             <div class="stats-head">
-              <div>
-                <p class="eyebrow">Statistics</p>
-                <h2>今日统计</h2>
-              </div>
+              <h2>今日统计</h2>
               <p class="stats-note">{phaseLabel ? `${phaseLabel} · ${timerLabel}` : timerLabel}</p>
             </div>
 
