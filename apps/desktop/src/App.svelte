@@ -1,12 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import spriteSheet from './assets/orange-pet/spritesheet.webp';
+  import {
+    resolveAnimationState,
+    isPausedPhase,
+    resolveFacingDirection,
+    resolvePetState,
+    type AnimationState,
+    type FacingDirection,
+    type IdleAction,
+    type PetState,
+    type PetStateOverride,
+  } from './lib/pet-state';
   import { defaultConfig, type PetConfig, type TimerPhase } from './lib/types';
   import { loadBootstrap, saveConfig, setPanelVisible } from './lib/desktop';
   import { getCurrentWindow, primaryMonitor, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
 
   const isPetView = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'pet';
-  const appWindow = getCurrentWindow();
+  const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const appWindow = isTauriRuntime ? getCurrentWindow() : null;
 
   const PET_WINDOW_WIDTH = 144;
   const PET_WINDOW_HEIGHT = 156;
@@ -29,27 +41,24 @@
   const IDLE_WANDER_INTERVAL_MS = 3200;
   const IDLE_WANDER_EDGE_BUFFER = 42;
 
-  type SpriteState =
-    | 'idle'
-    | 'running-right'
-    | 'running-left'
-    | 'waving'
-    | 'jumping'
-    | 'failed'
-    | 'waiting'
-    | 'running'
-    | 'review';
-
-  const SPRITE_VARIANTS: Record<SpriteState, { row: number; frames: number; speedMs: number }> = {
+  const SPRITE_VARIANTS: Record<AnimationState, { row: number; frames: number; speedMs: number }> = {
     idle: { row: 0, frames: 6, speedMs: 180 },
-    'running-right': { row: 1, frames: 8, speedMs: 72 },
-    'running-left': { row: 2, frames: 8, speedMs: 72 },
-    waving: { row: 3, frames: 4, speedMs: 140 },
+    focusing: { row: 6, frames: 6, speedMs: 180 },
+    breaking: { row: 8, frames: 6, speedMs: 140 },
+    paused: { row: 0, frames: 6, speedMs: 180 },
+    'dragging-left': { row: 2, frames: 8, speedMs: 72 },
+    'dragging-right': { row: 1, frames: 8, speedMs: 72 },
     jumping: { row: 4, frames: 5, speedMs: 120 },
-    failed: { row: 5, frames: 8, speedMs: 110 },
-    waiting: { row: 6, frames: 6, speedMs: 180 },
-    running: { row: 7, frames: 6, speedMs: 95 },
-    review: { row: 8, frames: 6, speedMs: 140 }
+    landing: { row: 4, frames: 5, speedMs: 120 },
+    'wandering-left': { row: 2, frames: 8, speedMs: 72 },
+    'wandering-right': { row: 1, frames: 8, speedMs: 72 },
+    'water-reminding': { row: 8, frames: 6, speedMs: 140 },
+    'stand-reminding': { row: 8, frames: 6, speedMs: 140 },
+    celebrating: { row: 3, frames: 4, speedMs: 140 },
+    'hydrated-feedback': { row: 8, frames: 6, speedMs: 140 },
+    'recovered-feedback': { row: 8, frames: 6, speedMs: 140 },
+    'hover-react': { row: 3, frames: 4, speedMs: 140 },
+    ready: { row: 0, frames: 6, speedMs: 180 }
   };
 
   type PanelView = 'dashboard' | 'stats';
@@ -66,9 +75,9 @@
   let remainingMs = defaultConfig.remainingMs;
   let activeFocusLengthMs = defaultConfig.activeFocusLengthMs;
   let focusSessions = 0;
-  let mood = 'idle';
-  let moodLine = '轻点我，我会陪你专注。';
-  let moodStickyUntil = 0;
+  let petState: PetState = 'idle';
+  let petStateOverride: PetStateOverride = null;
+  let petStateOverrideUntil = 0;
   let now = Date.now();
   let idleWave = 0;
   let waterDue = false;
@@ -80,7 +89,7 @@
   let standingScore = 100;
   let petVisualY = 0;
   let phaseLabel = '';
-  let focusCaption = '开始一轮专注，宠物会切到认真状态。';
+  let focusCaption = '点击开始后进入专注计时。';
   let waterCaption = '按固定节奏补水，别让叶冠先蔫下来。';
   let standCaption = '每隔一段时间起身，让宠物也跟着舒展。';
 
@@ -91,7 +100,7 @@
   let petScaleX = 1;
   let petScaleY = 1;
   let petRotation = 0;
-  let facingDirection: 'left' | 'right' = 'right';
+  let facingDirection: FacingDirection = 'right';
   let isDragging = false;
   let isAirborne = false;
   let dragDistance = 0;
@@ -107,7 +116,7 @@
   let raf = 0;
   let interval = 0;
   let frameAt = 0;
-  let spriteState: SpriteState = 'idle';
+  let animationState: AnimationState = 'idle';
   let spriteSpec = SPRITE_VARIANTS.idle;
   let lastHoverJumpAt = 0;
 
@@ -125,9 +134,7 @@
   }
   let spriteFrame = 0;
   let lastPersistSignature = '';
-  let nextIdleWanderDirection: 'left' | 'right' = 'right';
-
-  type IdleAction = 'none' | 'wander-left' | 'wander-right' | 'wave' | 'hop';
+  let nextIdleWanderDirection: FacingDirection = 'right';
   let idleAction: IdleAction = 'none';
   let idleActionEndsAt = 0;
   let nextIdleActionAt = Date.now() + 3000;
@@ -136,7 +143,7 @@
   const lerp = (from: number, to: number, amount: number) => from + (to - from) * amount;
   const floorY = () => viewportHeight - PET_HALF_Y - FLOOR_PADDING;
 
-  const spriteVars = (width: number) => {
+  const spriteVars = (width: number, row: number, frame: number) => {
     const height = (width * SPRITE_CELL_HEIGHT) / SPRITE_CELL_WIDTH;
     return [
       `--sprite-sheet:url(${spriteSheet})`,
@@ -144,8 +151,8 @@
       `--sprite-rows:${SPRITE_ROWS}`,
       `--sprite-display-cell-width:${width}px`,
       `--sprite-display-cell-height:${height}px`,
-      `--sprite-row:${spriteSpec.row}`,
-      `--sprite-frame:${spriteFrame}`,
+      `--sprite-row:${row}`,
+      `--sprite-frame:${frame}`,
       `width:${width}px`,
       `height:${height}px`
     ].join('; ');
@@ -214,111 +221,31 @@
     void persistConfig();
   };
 
-  const setMood = (nextMood: string, line: string, stickyMs = 0) => {
-    mood = nextMood;
-    moodLine = line;
-    moodStickyUntil = stickyMs > 0 ? Date.now() + stickyMs : 0;
+  const setPetStateOverride = (nextState: Exclude<PetStateOverride, null>, stickyMs = 0) => {
+    petStateOverride = nextState;
+    petStateOverrideUntil = stickyMs > 0 ? Date.now() + stickyMs : 0;
   };
 
-  const updateFacingDirection = (vx: number) => {
-    if (vx > 8) {
-      facingDirection = 'right';
-    } else if (vx < -8) {
-      facingDirection = 'left';
-    }
-  };
-
-  const resolveSpriteState = (): SpriteState => {
-    if (isDragging) {
-      updateFacingDirection(petVx);
-      return facingDirection === 'right' ? 'running-right' : 'running-left';
-    }
-    if (isAirborne) {
-      return 'jumping';
-    }
-    if (mood === 'celebrate') {
-      return 'waving';
-    }
-    if (mood === 'landing') {
-      return 'jumping';
-    }
-    if (mood === 'hydrated' || mood === 'recovered') {
-      return 'review';
-    }
-    if (mood === 'paused') {
-      return 'idle';
-    }
-    if (mood === 'focus') {
-      return 'waiting';
-    }
-    if (mood === 'break') {
-      return 'review';
-    }
-    if (mood === 'dragging') {
-      return 'running';
-    }
-    if (phase === 'focus') {
-      return 'waiting';
-    }
-    if (phase === 'break') {
-      return 'review';
-    }
-    if (Math.abs(petVx) > RUN_FRAME_VX_THRESHOLD && !isAirborne) {
-      updateFacingDirection(petVx);
-      return facingDirection === 'right' ? 'running-right' : 'running-left';
-    }
-    if (idleAction === 'wander-left') {
-      facingDirection = 'left';
-      return 'running-left';
-    }
-    if (idleAction === 'wander-right') {
-      facingDirection = 'right';
-      return 'running-right';
-    }
-    if (idleAction === 'wave') return 'waving';
-    if (phase === 'paused-focus' || phase === 'paused-break') {
-      return 'idle';
-    }
-    if (waterDue || standDue) {
-      return 'review';
-    }
-    return 'idle';
-  };
-
-  const refreshMood = () => {
-    if (moodStickyUntil > Date.now()) {
+  const refreshPetStateOverride = () => {
+    if (petStateOverrideUntil > Date.now()) {
       return;
     }
-    if (isDragging) {
-      setMood('dragging', '慢一点拎，我会自己弹回来。');
-      return;
-    }
-    if (waterDue) {
-      setMood('water', '该喝水了，我先替你着急。');
-      return;
-    }
-    if (standDue) {
-      setMood('stand', '起来活动两分钟，回来我还在。');
-      return;
-    }
-    if (phase === 'focus') {
-      setMood('focus', '专注进行中，我在帮你蓄力。');
-      return;
-    }
-    if (phase === 'break') {
-      setMood('break', '休息一会，我帮你看着时间。');
-      return;
-    }
-    setMood('idle', focusSessions > 0 ? `今天已经完成 ${focusSessions} 次专注。` : '轻点我，我会陪你专注。');
+    petStateOverride = null;
+    petStateOverrideUntil = 0;
   };
 
   const updateViewport = async () => {
     if (isPetView) {
-      const monitor = await primaryMonitor();
-      if (monitor) {
-        const scaleFactor = monitor.scaleFactor || 1;
-        viewportWidth = monitor.workArea.size.width / scaleFactor;
-        viewportHeight = monitor.workArea.size.height / scaleFactor;
+      if (isTauriRuntime) {
+        const monitor = await primaryMonitor();
+        if (monitor) {
+          const scaleFactor = monitor.scaleFactor || 1;
+          viewportWidth = monitor.workArea.size.width / scaleFactor;
+          viewportHeight = monitor.workArea.size.height / scaleFactor;
+        } else {
+          viewportWidth = window.innerWidth;
+          viewportHeight = window.innerHeight;
+        }
       } else {
         viewportWidth = window.innerWidth;
         viewportHeight = window.innerHeight;
@@ -340,7 +267,7 @@
   };
 
   const syncPetWindow = async () => {
-    if (!isPetView || !booted) {
+    if (!isPetView || !booted || !appWindow) {
       return;
     }
     const left = petX - PET_HALF_X;
@@ -367,10 +294,12 @@
     now = Date.now();
     booted = true;
     lastPersistSignature = '';
-    refreshMood();
+    refreshPetStateOverride();
 
     if (isPetView) {
-      await appWindow.setSize(new LogicalSize(PET_WINDOW_WIDTH, PET_WINDOW_HEIGHT));
+      if (appWindow) {
+        await appWindow.setSize(new LogicalSize(PET_WINDOW_WIDTH, PET_WINDOW_HEIGHT));
+      }
       void syncPetWindow();
     }
   };
@@ -380,7 +309,7 @@
     activeFocusLengthMs = config.focusMinutes * 60_000;
     remainingMs = activeFocusLengthMs;
     timerEndsAt = Date.now() + remainingMs;
-    refreshMood();
+    refreshPetStateOverride();
     await persistConfig();
   };
 
@@ -389,14 +318,13 @@
       remainingMs = Math.max(0, (timerEndsAt ?? Date.now()) - Date.now());
       phase = phase === 'focus' ? 'paused-focus' : 'paused-break';
       timerEndsAt = null;
-      setMood('paused', '我替你把时间按住了。', 2400);
       await persistConfig();
       return;
     }
     if (phase === 'paused-focus' || phase === 'paused-break') {
       timerEndsAt = Date.now() + remainingMs;
       phase = phase === 'paused-focus' ? 'focus' : 'break';
-      refreshMood();
+      refreshPetStateOverride();
       await persistConfig();
     }
   };
@@ -406,19 +334,19 @@
     timerEndsAt = null;
     remainingMs = config.focusMinutes * 60_000;
     activeFocusLengthMs = remainingMs;
-    refreshMood();
+    refreshPetStateOverride();
     await persistConfig();
   };
 
   const confirmWater = async () => {
     config.lastWaterAt = Date.now();
-    setMood('hydrated', '补水完成，我看起来更亮了。', 3200);
+    setPetStateOverride('hydrated-feedback', 3200);
     await persistConfig();
   };
 
   const confirmStand = async () => {
     config.lastStandAt = Date.now();
-    setMood('recovered', '活动完成，继续稳住节奏。', 3200);
+    setPetStateOverride('recovered-feedback', 3200);
     await persistConfig();
   };
 
@@ -466,7 +394,7 @@
     petVx = 0;
     petVy = 0;
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    refreshMood();
+    refreshPetStateOverride();
   };
 
   const pointerMove = (event: PointerEvent) => {
@@ -485,7 +413,7 @@
     petY = clamp(petY + dy, PET_HALF_Y + 18, floorY());
     petVx = clamp(dx / dt, -MAX_DRAG_SPEED, MAX_DRAG_SPEED);
     petVy = clamp(dy / dt, -MAX_DRAG_SPEED, MAX_DRAG_SPEED);
-    updateFacingDirection(petVx);
+    facingDirection = resolveFacingDirection(facingDirection, petVx);
     petRotation = 0;
     petScaleX = clamp(1 + Math.max(-petVy, 0) / 3200, 1, 1.12);
     petScaleY = clamp(1 - Math.abs(petVx) / 5200, 0.9, 1.02);
@@ -508,7 +436,7 @@
       isAirborne = true;
     }
 
-    refreshMood();
+    refreshPetStateOverride();
     await persistConfig();
   };
 
@@ -555,7 +483,7 @@
     isAirborne = true;
     idleAction = 'wave';
     idleActionEndsAt = nowMs + 900;
-    setMood('hover', '嘿！你碰到我了。', 1800);
+    setPetStateOverride('hover-react', 1800);
   };
 
   const physicsTick = (dt: number) => {
@@ -592,12 +520,12 @@
           petVx *= 0.75;
           petScaleX = 1.12;
           petScaleY = 0.86;
-          setMood('landing', '落地了，继续保持。');
+          setPetStateOverride('landing', 220);
         } else {
           petVy = 0;
           petVx = 0;
           isAirborne = false;
-          refreshMood();
+          refreshPetStateOverride();
         }
       }
       void syncPetWindow();
@@ -633,12 +561,12 @@
           remainingMs = config.breakMinutes * 60_000;
           timerEndsAt = now + remainingMs;
           config.lastStandAt = now;
-          setMood('celebrate', '这一轮完成了，休息一下。', 3800);
+          setPetStateOverride('celebrating', 3800);
         } else {
           phase = 'idle';
           timerEndsAt = null;
           remainingMs = config.focusMinutes * 60_000;
-          setMood('ready', '休息结束，下一轮可以开始了。', 2800);
+          setPetStateOverride('ready', 2800);
         }
       }
     }
@@ -663,7 +591,7 @@
         petScaleY = 0.96;
       }
       idleAction = 'none';
-      refreshMood();
+      refreshPetStateOverride();
     }
 
     if (idleAction === 'none' && now > nextIdleActionAt) {
@@ -697,7 +625,7 @@
     physicsTick(dt);
     timerTick();
     if (!isDragging && !isAirborne && idleAction === 'none') {
-      refreshMood();
+      refreshPetStateOverride();
     }
   };
 
@@ -791,25 +719,42 @@
       ? '专注中'
       : phase === 'break'
         ? '休息中'
-        : phase === 'paused-focus' || phase === 'paused-break'
+        : isPausedPhase(phase)
           ? '已暂停'
           : '';
   $: focusCaption =
     phase === 'focus'
-      ? '卜卜正在积攒专注能量。'
+      ? '当前处于专注状态。'
       : phase === 'break'
-        ? '进入恢复节奏，等会再冲一轮。'
-        : '开始一轮专注，宠物会切到认真状态。';
+        ? '当前处于休息状态。'
+        : '点击开始后进入专注计时。';
   $: waterCaption = waterDue
-    ? '叶冠开始闪动了，去喝一口水。'
-    : `每 ${config.waterIntervalMinutes} 分钟检查一次补水节奏。`;
+    ? '补水时间到了。'
+    : `每 ${config.waterIntervalMinutes} 分钟检查一次补水。`;
   $: standCaption = standDue
-    ? '该起身活动两分钟了。'
+    ? '该起身活动一下了。'
     : `每 ${config.standIntervalMinutes} 分钟提醒一次起身。`;
-  $: spriteState = resolveSpriteState();
-  $: spriteSpec = SPRITE_VARIANTS[spriteState];
+  $: petState = resolvePetState({
+    idleAction,
+    isAirborne,
+    isDragging,
+    overrideState: petStateOverride,
+    phase,
+    standDue,
+    waterDue
+  });
+  $: ({ animationState, facingDirection } = resolveAnimationState({
+    facingDirection,
+    idleAction,
+    petState,
+    petVx,
+    runFrameVxThreshold: RUN_FRAME_VX_THRESHOLD
+  }));
+  $: spriteSpec = SPRITE_VARIANTS[animationState];
   $: spriteFrame =
-    spriteState === 'idle' ? idleBlinkFrame(now) : Math.floor(now / spriteSpec.speedMs) % spriteSpec.frames;
+    animationState === 'idle' || animationState === 'paused' || animationState === 'ready'
+      ? idleBlinkFrame(now)
+      : Math.floor(now / spriteSpec.speedMs) % spriteSpec.frames;
 </script>
 
 <svelte:window on:pointermove={pointerMove} on:pointerup={pointerUp} on:pointercancel={pointerUp} />
@@ -817,7 +762,7 @@
 {#if isPetView}
   <div class="shell pet-shell">
     <button
-      class={`pet pet-window pet-${mood}`}
+      class={`pet pet-window pet-${petState}`}
       type="button"
       aria-label="桌面宠物"
       on:pointerenter={hoverJump}
@@ -826,7 +771,7 @@
       style={`--pet-scale-x:${petScaleX}; --pet-scale-y:${petScaleY}; --pet-rotate:${petRotation}deg;`}
     >
       <div class="pet-frame" aria-hidden="true">
-        <div class="pet-sprite main-pet-sprite" style={spriteVars(SPRITE_MAIN_WIDTH)}></div>
+        <div class="pet-sprite main-pet-sprite" style={spriteVars(SPRITE_MAIN_WIDTH, spriteSpec.row, spriteFrame)}></div>
       </div>
     </button>
   </div>
@@ -841,7 +786,7 @@
         <div class="panel-head">
           <div class="panel-brand">
             <div class="panel-mark" aria-hidden="true">
-              <div class="pet-sprite panel-mark-sprite" style={spriteVars(28)}></div>
+              <div class="pet-sprite panel-mark-sprite" style={spriteVars(28, spriteSpec.row, spriteFrame)}></div>
             </div>
             <div class="panel-title-group">
               <h1>卜卜</h1>
@@ -849,7 +794,7 @@
           </div>
           <div class="panel-actions">
             <button
-              class="ghost panel-icon-button"
+              class="ghost panel-view-toggle"
               type="button"
               on:click={togglePanelView}
               aria-label={panelView === 'dashboard' ? '查看统计' : '返回首页'}
@@ -865,6 +810,7 @@
                   <path d="M9.8 3.2 6 7h7v2H6l3.8 3.8-1.4 1.4L2 8l6.4-6.2 1.4 1.4Z"></path>
                 </svg>
               {/if}
+              <span>{panelView === 'dashboard' ? '统计' : '首页'}</span>
             </button>
             <button class="ghost panel-close" type="button" on:click={closePanel} aria-label="收起面板">
               <span class="panel-close-icon" aria-hidden="true"></span>
@@ -903,16 +849,24 @@
               >
                 {phase === 'focus' || phase === 'break' ? '⏸' : '▶'}
               </button>
-              <div class="row-foot">
-                <div class="stepper">
-                  <button type="button" on:click={() => adjustFocusMinutes(-5)}>-</button>
-                  <strong>{config.focusMinutes}m</strong>
-                  <button type="button" on:click={() => adjustFocusMinutes(5)}>+</button>
-                </div>
-                <div class="stepper">
-                  <button type="button" on:click={() => adjustBreakMinutes(-1)}>-</button>
-                  <strong>{config.breakMinutes}m</strong>
-                  <button type="button" on:click={() => adjustBreakMinutes(1)}>+</button>
+              <div class="row-foot row-foot-focus">
+                <div class="timer-settings">
+                  <div class="timer-setting timer-setting-focus">
+                    <span class="timer-setting-label">专注</span>
+                    <div class="stepper">
+                      <button type="button" on:click={() => adjustFocusMinutes(-5)}>-</button>
+                      <strong>{config.focusMinutes}m</strong>
+                      <button type="button" on:click={() => adjustFocusMinutes(5)}>+</button>
+                    </div>
+                  </div>
+                  <div class="timer-setting timer-setting-break">
+                    <span class="timer-setting-label">休息</span>
+                    <div class="stepper">
+                      <button type="button" on:click={() => adjustBreakMinutes(-1)}>-</button>
+                      <strong>{config.breakMinutes}m</strong>
+                      <button type="button" on:click={() => adjustBreakMinutes(1)}>+</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </article>
@@ -932,7 +886,7 @@
                 </svg>
               </div>
               <div class="row-body">
-                <h3>{waterDue ? '该补水了' : '补水稳定'}</h3>
+                <h3>{waterDue ? '补水提醒' : '补水正常'}</h3>
                 <p class="row-copy">{waterCaption}</p>
               </div>
               <button class="round-action" type="button" aria-label="我喝了" on:click={confirmWater}>✓</button>
@@ -962,7 +916,7 @@
                 </svg>
               </div>
               <div class="row-body">
-                <h3>{standDue ? '该活动了' : '节奏正常'}</h3>
+                <h3>{standDue ? '起身提醒' : '活动正常'}</h3>
                 <p class="row-copy">{standCaption}</p>
               </div>
               <button class="round-action" type="button" aria-label="我起来了" on:click={confirmStand}>✓</button>
