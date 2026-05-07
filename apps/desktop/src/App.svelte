@@ -14,6 +14,8 @@
   const PET_HALF_Y = PET_WINDOW_HEIGHT / 2;
   const FLOOR_PADDING = 32;
   const SIDE_PADDING = 18;
+  const MAX_DRAG_SPEED = 1800;
+  const CEILING_PADDING = 8;
   const GRAVITY = 1900;
   const AIR_DRAG = 0.992;
   const SPRITE_COLUMNS = 8;
@@ -452,8 +454,8 @@
 
     petX = clamp(petX + dx, PET_HALF_X + SIDE_PADDING, viewportWidth - PET_HALF_X - SIDE_PADDING);
     petY = clamp(petY + dy, PET_HALF_Y + 18, floorY());
-    petVx = dx / dt;
-    petVy = dy / dt;
+    petVx = clamp(dx / dt, -MAX_DRAG_SPEED, MAX_DRAG_SPEED);
+    petVy = clamp(dy / dt, -MAX_DRAG_SPEED, MAX_DRAG_SPEED);
     petRotation = clamp(petVx * 0.015, -18, 18);
     petScaleX = clamp(1 + Math.abs(petVx) / 2600 + Math.max(-petVy, 0) / 3200, 1, 1.18);
     petScaleY = clamp(1 - Math.abs(petVx) / 3800, 0.84, 1.02);
@@ -527,6 +529,12 @@
       if (petX <= leftBound || petX >= rightBound) {
         petX = clamp(petX, leftBound, rightBound);
         petVx *= -0.35;
+      }
+
+      const topBound = PET_HALF_Y + CEILING_PADDING;
+      if (petY <= topBound) {
+        petY = topBound;
+        petVy *= -0.3;
       }
 
       if (petY >= floor) {
