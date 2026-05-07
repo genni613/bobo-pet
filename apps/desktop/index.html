@@ -1,13 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="application-name" content="卜卜专注宠物" />
+    <meta name="description" content="卜卜专注宠物的桌面看板，集成番茄钟、补水提醒和起身提醒。" />
+    <meta name="theme-color" content="#f3ebe0" />
+    <meta name="color-scheme" content="light" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>desktop</title>
+    <title>卜卜专注宠物</title>
+    <style>
+      html,
+      body,
+      #app {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: transparent;
+      }
+
+      body {
+        overflow: hidden;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" role="application" aria-label="卜卜专注宠物"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import spriteSheet from './assets/orange-pet/spritesheet.webp';
+  import pomodoroIcon from './assets/panel-icons/pomodoro-focus.png';
+  import waterIcon from './assets/panel-icons/water-reminder.png';
+  import standIcon from './assets/panel-icons/stand-up-reminder.png';
   import { defaultConfig, type PetConfig, type TimerPhase } from './lib/types';
   import { loadBootstrap, saveConfig, setPanelVisible } from './lib/desktop';
   import { getCurrentWindow, primaryMonitor, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
@@ -48,12 +51,15 @@
     review: { row: 8, frames: 6, speedMs: 140 }
   };
 
-  let viewportWidth = isPetView ? PET_WINDOW_WIDTH : 420;
-  let viewportHeight = isPetView ? PET_WINDOW_HEIGHT : 820;
+  type PanelView = 'dashboard' | 'stats';
+
+  let viewportWidth = isPetView ? PET_WINDOW_WIDTH : 252;
+  let viewportHeight = isPetView ? PET_WINDOW_HEIGHT : 492;
   let config: PetConfig = { ...defaultConfig };
   let booted = false;
 
   let panelOpen = !isPetView;
+  let panelView: PanelView = 'dashboard';
   let phase: TimerPhase = 'idle';
   let timerEndsAt: number | null = null;
   let remainingMs = defaultConfig.remainingMs;
@@ -72,7 +78,7 @@
   let hydrationScore = 100;
   let standingScore = 100;
   let petVisualY = 0;
-  let phaseLabel = '待命';
+  let phaseLabel = '';
 
   let petX = 300;
   let petY = 0;
@@ -497,6 +503,7 @@
       return;
     }
     panelOpen = true;
+    panelView = 'dashboard';
     await persistConfig();
     await setPanelVisible(true);
   };
@@ -506,8 +513,13 @@
       return;
     }
     panelOpen = false;
+    panelView = 'dashboard';
     await persistConfig();
     await setPanelVisible(false);
+  };
+
+  const togglePanelView = () => {
+    panelView = panelView === 'dashboard' ? 'stats' : 'dashboard';
   };
 
   const physicsTick = (dt: number) => {
@@ -555,11 +567,14 @@
       void syncPetWindow();
     } else {
       petY = floor;
-      petRotation = lerp(petRotation, 0, 0.12);
       if (idleAction === 'wander-left' || idleAction === 'wander-right') {
         petX += petVx * dt;
         petX = clamp(petX, PET_HALF_X + SIDE_PADDING, viewportWidth - PET_HALF_X - SIDE_PADDING);
+        const targetRot = petVx > 0 ? 5 : -5;
+        petRotation = lerp(petRotation, targetRot, 0.15);
         void syncPetWindow();
+      } else {
+        petRotation = lerp(petRotation, 0, 0.12);
       }
     }
 
@@ -606,6 +621,8 @@
     if (idleAction !== 'none' && now > idleActionEndsAt) {
       if (idleAction === 'wander-left' || idleAction === 'wander-right') {
         petVx = 0;
+        petScaleX = 1.08;
+        petScaleY = 0.9;
       }
       idleAction = 'none';
       refreshMood();
@@ -617,6 +634,8 @@
         const dir: IdleAction = Math.random() < 0.5 ? 'wander-left' : 'wander-right';
         idleAction = dir;
         petVx = dir === 'wander-left' ? -55 : 55;
+        petScaleX = 0.9;
+        petScaleY = 1.1;
         idleActionEndsAt = now + 2000 + Math.random() * 2500;
       } else if (roll < 0.38) {
         idleAction = 'wave';
@@ -734,14 +753,13 @@
       ? '专注中'
       : phase === 'break'
         ? '休息中'
-        : phase === 'paused-focus' || phase === 'paused-break'
+      : phase === 'paused-focus' || phase === 'paused-break'
           ? '已暂停'
-          : '待命';
+          : '';
   $: spriteState = resolveSpriteState();
   $: spriteSpec = SPRITE_VARIANTS[spriteState];
-  $: spriteFrame = spriteState === 'idle'
-    ? idleBlinkFrame(now)
-    : Math.floor(now / spriteSpec.speedMs) % spriteSpec.frames;
+  $: spriteFrame =
+    spriteState === 'idle' ? idleBlinkFrame(now) : Math.floor(now / spriteSpec.speedMs) % spriteSpec.frames;
 </script>
 
 <svelte:window on:pointermove={pointerMove} on:pointerup={pointerUp} on:pointercancel={pointerUp} />
@@ -767,109 +785,165 @@
     <div class="orb orb-a"></div>
     <div class="orb orb-b"></div>
 
-    <aside class:open={panelOpen} class="panel glass">
-      <div class="panel-head">
-        <div class="panel-brand">
-          <div class="panel-mark" aria-hidden="true">
-            <div class="pet-sprite panel-mark-sprite" style={spriteVars(28)}></div>
+    <aside class:open={panelOpen} class="panel">
+      <div class="panel-content">
+        <div class="panel-head">
+          <div class="panel-brand">
+            <div class="panel-mark" aria-hidden="true">
+              <div class="pet-sprite panel-mark-sprite" style={spriteVars(28)}></div>
+            </div>
+            <div class="panel-title-group">
+              <p class="eyebrow">Dashboard</p>
+              <h1>卜卜</h1>
+            </div>
           </div>
-          <div>
-            <p class="eyebrow">Element Pet</p>
-            <h1>灵橙专注宠物</h1>
-            <p class="panel-subtitle">专注 / 补水 / 起身提醒</p>
-          </div>
-        </div>
-        <button class="ghost panel-close" type="button" on:click={closePanel}>收起</button>
-      </div>
-
-      <section class="hero-card glass summary-card">
-        <div class="hero-copy">
-          <p class="status-chip">{phaseLabel}</p>
-          <h2>{moodLine}</h2>
-          <p>今天已专注 {formatMinutes(focusAccumulatedMinutes)}，补水值 {hydrationScore}%，站立值 {standingScore}%</p>
-        </div>
-        <div class="mini-pet" aria-hidden="true">
-          <div class="pet-sprite mini-pet-sprite" style={spriteVars(SPRITE_MINI_WIDTH)}></div>
-        </div>
-      </section>
-
-      <section class="card-group">
-        <article class="feature-card glass row-card focus-card compact-card">
-          <div class="row-icon row-icon-focus" aria-hidden="true">⏱</div>
-          <div class="row-body">
-            <p class="eyebrow">番茄钟</p>
-            <h3>{timerLabel}</h3>
-            <p class="feature-copy">
-              {phase === 'focus'
-                ? '专注中'
-                : phase === 'break'
-                  ? '休息中'
-                  : '25 / 5'}
-            </p>
-          </div>
-          <button
-            class="round-action"
-            type="button"
-            aria-label={phase === 'focus' || phase === 'break' ? '重新开始专注' : '开始专注'}
-            on:click={startFocus}
-          >
-            {phase === 'focus' || phase === 'break' ? '↻' : '▶'}
-          </button>
-          <div class="row-foot">
-            <button class="mini-ghost" type="button" on:click={togglePause}>
-              {phase === 'paused-focus' || phase === 'paused-break' ? '继续' : '暂停'}
+          <div class="panel-actions">
+            <button
+              class="ghost panel-icon-button"
+              type="button"
+              on:click={togglePanelView}
+              aria-label={panelView === 'dashboard' ? '查看统计' : '返回首页'}
+            >
+              {#if panelView === 'dashboard'}
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2" y="9" width="2" height="5" rx="1"></rect>
+                  <rect x="7" y="6" width="2" height="8" rx="1"></rect>
+                  <rect x="12" y="3" width="2" height="11" rx="1"></rect>
+                </svg>
+              {:else}
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M9.8 3.2 6 7h7v2H6l3.8 3.8-1.4 1.4L2 8l6.4-6.2 1.4 1.4Z"></path>
+                </svg>
+              {/if}
             </button>
-            <button class="mini-ghost" type="button" on:click={resetTimer}>重置</button>
-            <span class="metric">{config.focusMinutes}/{config.breakMinutes}m</span>
-            <div class="stepper compact">
-              <button type="button" on:click={() => adjustFocusMinutes(-5)}>-</button>
-              <strong>{config.focusMinutes}m</strong>
-              <button type="button" on:click={() => adjustFocusMinutes(5)}>+</button>
-            </div>
-            <div class="stepper compact">
-              <button type="button" on:click={() => adjustBreakMinutes(-1)}>-</button>
-              <strong>{config.breakMinutes}m</strong>
-              <button type="button" on:click={() => adjustBreakMinutes(1)}>+</button>
-            </div>
+            <button class="ghost panel-close" type="button" on:click={closePanel} aria-label="收起面板">
+              <span class="panel-close-icon" aria-hidden="true"></span>
+              <span>收起</span>
+            </button>
           </div>
-        </article>
+        </div>
 
-        <article class:due={waterDue} class="feature-card glass row-card compact-card">
-          <div class="row-icon row-icon-water" aria-hidden="true">💧</div>
-          <div class="row-body">
-            <p class="eyebrow">喝水</p>
-            <h3>{waterDue ? '该补水了' : '补水稳定'}</h3>
-            <p class="feature-copy">{waterDue ? '现在补一口' : '下一次稍后提醒'}</p>
-          </div>
-          <button class="round-action" type="button" aria-label="我喝了" on:click={confirmWater}>✓</button>
-          <div class="row-foot">
-            <span class="metric">{config.waterIntervalMinutes}m</span>
-            <div class="stepper compact">
-              <button type="button" on:click={() => adjustWaterMinutes(-15)}>-</button>
-              <strong>{config.waterIntervalMinutes}m</strong>
-              <button type="button" on:click={() => adjustWaterMinutes(15)}>+</button>
-            </div>
-          </div>
-        </article>
+        {#if panelView === 'dashboard'}
+          <section class="card-group">
+            <article class="feature-card focus-card">
+              <div class="focus-card-header">
+                <div class="row-icon row-icon-focus" aria-hidden="true">
+                  <img src={pomodoroIcon} alt="" />
+                </div>
+                <div class="focus-card-title">
+                  <h3>番茄钟</h3>
+                  <span class="focus-chip">{phaseLabel || '准备就绪'}</span>
+                </div>
+                <div class="focus-card-actions">
+                  <button
+                    class="icon-ghost"
+                    type="button"
+                    aria-label={phase === 'paused-focus' || phase === 'paused-break' ? '继续' : '暂停'}
+                    on:click={togglePause}
+                  >
+                    {phase === 'paused-focus' || phase === 'paused-break' ? '▶' : '⏸'}
+                  </button>
+                  <button
+                    class="round-action"
+                    type="button"
+                    aria-label={phase === 'focus' || phase === 'break' ? '重新开始专注' : '开始专注'}
+                    on:click={startFocus}
+                  >
+                    {phase === 'focus' || phase === 'break' ? '↻' : '▶'}
+                  </button>
+                </div>
+              </div>
+              <div class="timer-display">
+                <span class="timer-label">{timerLabel}</span>
+                <div class="timer-progress">
+                  <div class="timer-progress-fill" style={`width: ${focusProgress * 100}%`}></div>
+                </div>
+              </div>
+              <div class="focus-card-foot">
+                <button class="mini-ghost" type="button" on:click={resetTimer}>重置</button>
+                <div class="stepper">
+                  <button type="button" on:click={() => adjustFocusMinutes(-5)}>-</button>
+                  <strong>{config.focusMinutes}m</strong>
+                  <button type="button" on:click={() => adjustFocusMinutes(5)}>+</button>
+                </div>
+                <div class="stepper">
+                  <button type="button" on:click={() => adjustBreakMinutes(-1)}>-</button>
+                  <strong>{config.breakMinutes}m</strong>
+                  <button type="button" on:click={() => adjustBreakMinutes(1)}>+</button>
+                </div>
+              </div>
+            </article>
 
-        <article class:due={standDue} class="feature-card glass row-card compact-card">
-          <div class="row-icon row-icon-stand" aria-hidden="true">🧍</div>
-          <div class="row-body">
-            <p class="eyebrow">起身</p>
-            <h3>{standDue ? '该起来动一下' : '节奏正常'}</h3>
-            <p class="feature-copy">{standDue ? '走两分钟再回来' : '后台继续计时'}</p>
-          </div>
-          <button class="round-action" type="button" aria-label="我起来了" on:click={confirmStand}>✓</button>
-          <div class="row-foot">
-            <span class="metric">{config.standIntervalMinutes}m</span>
-            <div class="stepper compact">
-              <button type="button" on:click={() => adjustStandMinutes(-15)}>-</button>
-              <strong>{config.standIntervalMinutes}m</strong>
-              <button type="button" on:click={() => adjustStandMinutes(15)}>+</button>
+            <article class:due={waterDue} class="feature-card reminder-card water-card">
+              <div class="row-icon row-icon-water" aria-hidden="true">
+                <img src={waterIcon} alt="" />
+              </div>
+              <div class="row-body">
+                <h3>{waterDue ? '该补水了' : '补水稳定'}</h3>
+              </div>
+              <button class="round-action" type="button" aria-label="我喝了" on:click={confirmWater}>✓</button>
+              <div class="row-foot">
+                <div class="stepper">
+                  <button type="button" on:click={() => adjustWaterMinutes(-15)}>-</button>
+                  <strong>{config.waterIntervalMinutes}m</strong>
+                  <button type="button" on:click={() => adjustWaterMinutes(15)}>+</button>
+                </div>
+              </div>
+            </article>
+
+            <article class:due={standDue} class="feature-card reminder-card stand-card">
+              <div class="row-icon row-icon-stand" aria-hidden="true">
+                <img src={standIcon} alt="" />
+              </div>
+              <div class="row-body">
+                <h3>{standDue ? '该活动了' : '节奏正常'}</h3>
+              </div>
+              <button class="round-action" type="button" aria-label="我起来了" on:click={confirmStand}>✓</button>
+              <div class="row-foot">
+                <div class="stepper">
+                  <button type="button" on:click={() => adjustStandMinutes(-15)}>-</button>
+                  <strong>{config.standIntervalMinutes}m</strong>
+                  <button type="button" on:click={() => adjustStandMinutes(15)}>+</button>
+                </div>
+              </div>
+            </article>
+          </section>
+        {:else}
+          <section class="stats-card">
+            <div class="stats-head">
+              <div>
+                <p class="eyebrow">Statistics</p>
+                <h2>今日统计</h2>
+              </div>
+              <p class="stats-note">{phaseLabel ? `${phaseLabel} · ${timerLabel}` : timerLabel}</p>
             </div>
-          </div>
-        </article>
-      </section>
+
+            <div class="stats-grid">
+              <article class="stat-tile">
+                <span>专注次数</span>
+                <strong>{focusSessions}</strong>
+              </article>
+              <article class="stat-tile">
+                <span>累计专注</span>
+                <strong>{formatMinutes(focusAccumulatedMinutes)}</strong>
+              </article>
+              <article class="stat-tile">
+                <span>补水进度</span>
+                <strong>{hydrationScore}%</strong>
+              </article>
+              <article class="stat-tile">
+                <span>起身进度</span>
+                <strong>{standingScore}%</strong>
+              </article>
+            </div>
+
+            <div class="stats-strip">
+              <span class="status-chip">{config.focusMinutes}m 专注</span>
+              <span class="status-chip">{config.breakMinutes}m 休息</span>
+            </div>
+          </section>
+        {/if}
+      </div>
     </aside>
   </div>
 {/if}

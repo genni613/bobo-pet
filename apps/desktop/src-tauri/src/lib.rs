@@ -5,9 +5,11 @@ use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuil
 
 const PET_HALF_W: f64 = 72.0;
 const PET_HALF_H: f64 = 78.0;
-const PANEL_W: f64 = 420.0;
-const PANEL_H: f64 = 760.0;
-const PANEL_GAP: f64 = 12.0;
+const PANEL_W: f64 = 252.0;
+const PANEL_H: f64 = 300.0;
+const PANEL_GAP: f64 = 8.0;
+const PANEL_RAISE: f64 = 72.0;
+const PANEL_EDGE_MARGIN: f64 = 24.0;
 
 #[tauri::command]
 fn load_bootstrap(app: tauri::AppHandle) -> Result<AppBootstrap, String> {
@@ -56,18 +58,18 @@ fn set_panel_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String>
           }
         }
 
-        // Align panel top near pet top
-        let mut py = pet_y - PET_HALF_H - 20.0;
-        if py + PANEL_H > wa_bottom {
-          py = wa_bottom - PANEL_H;
-        }
-        if py < wa_top {
-          py = wa_top;
-        }
+        // Keep the panel a little higher than the pet anchor.
+        let mut py = pet_y - PET_HALF_H - PANEL_RAISE;
+        let min_y = wa_top + PANEL_EDGE_MARGIN;
+        let max_y = (wa_bottom - PANEL_H - PANEL_EDGE_MARGIN).max(min_y);
+        py = py.clamp(min_y, max_y);
 
         (px, py)
       }
-      None => (pet_x + PET_HALF_W + PANEL_GAP, pet_y - PET_HALF_H - 20.0),
+      None => (
+        pet_x + PET_HALF_W + PANEL_GAP,
+        (pet_y - PET_HALF_H - PANEL_RAISE).clamp(PANEL_EDGE_MARGIN, f64::MAX)
+      ),
     };
 
     main

@@ -14,10 +14,10 @@
     "windows": [
       {
         "title": "PetElement",
-        "width": 440,
-        "height": 860,
-        "minWidth": 360,
-        "minHeight": 720,
+        "width": 264,
+        "height": 516,
+        "minWidth": 216,
+        "minHeight": 432,
         "visible": false,
         "resizable": true,
         "fullscreen": false,
