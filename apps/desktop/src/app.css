@@ -396,9 +396,9 @@ button {
 
 .focus-card-title h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1.2;
 }
 
 .focus-card-actions {
@@ -451,7 +451,7 @@ button {
 .reminder-card {
   padding: 8px 10px;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   grid-template-areas:
     'icon body action'
     'foot foot foot';
@@ -485,9 +485,9 @@ button {
 
 /* ═══ Common Card Elements ═══ */
 .row-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -528,9 +528,9 @@ button {
 
 .row-body h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
-  line-height: 1.15;
+  line-height: 1.2;
 }
 
 .row-foot {
@@ -538,7 +538,7 @@ button {
   align-items: center;
   flex-wrap: wrap;
   gap: 3px;
-  padding-left: 44px;
+  padding-left: 50px;
 }
 
 .round-action {
@@ -569,12 +569,12 @@ button {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 0 5px;
   background: var(--accent-focus-soft);
   color: var(--accent-focus);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .status-chip {
@@ -582,10 +582,10 @@ button {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  padding: 4px 9px;
+  padding: 3px 7px;
   background: rgba(196, 107, 74, 0.08);
   color: #8a5a30;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
 }
 
