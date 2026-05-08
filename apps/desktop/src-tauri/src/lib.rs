@@ -5,8 +5,8 @@ use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuil
 
 const PET_HALF_W: f64 = 72.0;
 const PET_HALF_H: f64 = 78.0;
-const PANEL_W: f64 = 252.0;
-const PANEL_H: f64 = 300.0;
+const PANEL_W: f64 = 286.0;
+const PANEL_H: f64 = 400.0;
 const PANEL_GAP: f64 = 8.0;
 const PANEL_RAISE: f64 = 72.0;
 const PANEL_EDGE_MARGIN: f64 = 24.0;

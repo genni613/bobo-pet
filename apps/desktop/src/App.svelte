@@ -19,6 +19,8 @@
   const isPetView = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'pet';
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const appWindow = isTauriRuntime ? getCurrentWindow() : null;
+  const petSlotRaw = isPetView ? Number(new URLSearchParams(window.location.search).get('slot') ?? '0') : 0;
+  const petSlot = Number.isFinite(petSlotRaw) ? petSlotRaw : 0;
 
   const PET_WINDOW_WIDTH = 144;
   const PET_WINDOW_HEIGHT = 156;
@@ -40,6 +42,7 @@
   const IDLE_WANDER_DURATION_MS = 980;
   const IDLE_WANDER_INTERVAL_MS = 3200;
   const IDLE_WANDER_EDGE_BUFFER = 42;
+  const PET_INSTANCE_SPACING = 120;
 
   const SPRITE_VARIANTS: Record<AnimationState, { row: number; frames: number; speedMs: number }> = {
     idle: { row: 0, frames: 6, speedMs: 180 },
@@ -63,8 +66,8 @@
 
   type PanelView = 'dashboard' | 'stats';
 
-  let viewportWidth = isPetView ? PET_WINDOW_WIDTH : 252;
-  let viewportHeight = isPetView ? PET_WINDOW_HEIGHT : 492;
+  let viewportWidth = isPetView ? PET_WINDOW_WIDTH : 320;
+  let viewportHeight = isPetView ? PET_WINDOW_HEIGHT : 500;
   let config: PetConfig = { ...defaultConfig };
   let booted = false;
 
@@ -182,8 +185,8 @@
     breakMinutes: config.breakMinutes,
     waterIntervalMinutes: config.waterIntervalMinutes,
     standIntervalMinutes: config.standIntervalMinutes,
-    petX,
-    petY: Math.min(petY, floorY()),
+    petX: config.petX,
+    petY: config.petY,
     panelOpen,
     phase,
     remainingMs,
@@ -284,12 +287,22 @@
     focusSessions = bootstrap.config.focusSessions ?? 0;
     panelOpen = isPetView ? false : true;
 
-    petX = clamp(
-      bootstrap.config.petX || viewportWidth / 2,
-      PET_HALF_X + SIDE_PADDING,
-      viewportWidth - PET_HALF_X - SIDE_PADDING
-    );
-    petY = clamp(bootstrap.config.petY || floorY(), PET_HALF_Y + 24, floorY());
+    if (isPetView) {
+      const slotOffset = (petSlot - 1) * PET_INSTANCE_SPACING;
+      petX = clamp(
+        viewportWidth / 2 + slotOffset,
+        PET_HALF_X + SIDE_PADDING,
+        viewportWidth - PET_HALF_X - SIDE_PADDING
+      );
+      petY = clamp(floorY(), PET_HALF_Y + 24, floorY());
+    } else {
+      petX = clamp(
+        bootstrap.config.petX || viewportWidth / 2,
+        PET_HALF_X + SIDE_PADDING,
+        viewportWidth - PET_HALF_X - SIDE_PADDING
+      );
+      petY = clamp(bootstrap.config.petY || floorY(), PET_HALF_Y + 24, floorY());
+    }
     timerEndsAt = phase === 'focus' || phase === 'break' ? Date.now() + remainingMs : null;
     now = Date.now();
     booted = true;
@@ -457,7 +470,7 @@
     panelOpen = true;
     panelView = 'dashboard';
     await persistConfig();
-    await setPanelVisible(true);
+    await setPanelVisible(true, petX, petY);
   };
 
   const closePanel = async () => {

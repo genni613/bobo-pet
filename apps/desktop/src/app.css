@@ -137,7 +137,6 @@ button {
   width: 100%;
   height: 100%;
   max-height: none;
-  zoom:0.7;
   padding: 10px;
   border-radius: 18px;
   display: flex;
@@ -469,6 +468,22 @@ button {
   row-gap: 6px;
 }
 
+.reminder-card > .row-icon {
+  grid-area: icon;
+}
+
+.reminder-card > .row-body {
+  grid-area: body;
+}
+
+.reminder-card > .round-action {
+  grid-area: action;
+}
+
+.reminder-card > .row-foot {
+  grid-area: foot;
+}
+
 .water-card::before {
   background: var(--accent-water);
 }
@@ -584,6 +599,11 @@ button {
   -moz-osx-font-smoothing: grayscale;
 }
 
+.water-card .row-body h3,
+.stand-card .row-body h3 {
+  font-weight: 700;
+}
+
 .row-foot {
   display: flex;
   align-items: center;
@@ -601,9 +621,10 @@ button {
 
 .timer-settings {
   width: 100%;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
 }
 
 .timer-setting {
@@ -611,7 +632,7 @@ button {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  flex: 1 1 0;
+  align-items: center;
 }
 
 .timer-setting-label {
@@ -627,25 +648,15 @@ button {
 
 .timer-setting-focus .timer-setting-label {
   color: var(--accent-focus);
-  text-align: left;
 }
 
 .timer-setting-break .timer-setting-label {
   color: var(--accent-stand);
-  text-align: right;
 }
 
 .timer-setting .stepper {
-  width: fit-content;
+  width: auto;
   max-width: 100%;
-}
-
-.timer-setting-break {
-  align-items: flex-end;
-}
-
-.timer-setting-break .stepper {
-  margin-left: auto;
 }
 
 .round-action {
@@ -1061,7 +1072,7 @@ button {
   .panel {
     width: calc(100% - 32px);
     left: 16px;
-    top: 16px;
+    top: 0;
     padding: 10px;
     border-radius: 20px;
   }
